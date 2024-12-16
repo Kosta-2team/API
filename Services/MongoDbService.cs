@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 using parking.Models;
 using Microsoft.AspNetCore.SignalR;
@@ -109,6 +109,15 @@ namespace parking.Services
                     _hubContext.Clients.All.SendAsync("ReceiveChange", change.FullDocument).Wait();
                 }
             });
+        }
+
+        public async Task<List<entriesData>> GetEntriesWithPaging(string collectionName, int page, int limit)
+        {
+            var collection = _car.GetCollection<entriesData>(collectionName);
+            return await collection.Find(FilterDefinition<entriesData>.Empty)
+                                   .Skip((page - 1) * limit) // 건너뛰기
+                                   .Limit(limit)            // 제한
+                                   .ToListAsync();
         }
 
     }
