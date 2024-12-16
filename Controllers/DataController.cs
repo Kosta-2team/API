@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -27,36 +27,49 @@ namespace parking.Controllers
 
         // GET: 모든 데이터 가져오기 (Database1 - entries)
         //HTTP GET 요청을 처리(API 경로가 base_url/database1인 요청을 처리)
-        [HttpGet("database1")]  
-        //비동기로 동작하며, 호출자가 HTTP 응답을 받을 수 있도록 IActionResult를 반환
-        //반환 타입이 IActionResult인 이유는
-        //다양한 HTTP 응답 상태 코드와 데이터를 유연하게 반환할 수 있기 때문
-        public async Task<IActionResult> GetDatabase1Data()
+        [HttpGet("database1")]
+        public async Task<IActionResult> GetDatabase1Data([FromQuery] int page = 1, [FromQuery] int limit = 10)
         {
-            //MongoDB의 데이터를 읽기 위해 entries라는 컬렌션 반환
+            // 페이지와 제한값 유효성 검사
+            if (page <= 0 || limit <= 0)
+                return BadRequest("Page and limit must be greater than 0.");
+
+            // entries 컬렉션 가져오기
             var collection = _service.GetentriesCollection("entries");
 
-            // 데이터를 가져와 변환
-            var data = await collection.Find(_ => true) //MongoDB 쿼리로, 필터 조건이 없는 모든 문서를 가져옴
-                                                        //_ => true는 람다 표현식으로, "모든 데이터"를 반환
-                                        .ToListAsync(); //비동기적으로 데이터를 가져와 리스트로 변환
+            // 전체 데이터 개수 계산
+            var totalCount = await collection.CountDocumentsAsync(_ => true);
 
-            // ObjectId를 문자열로 변환
-            var response = data.Select(entry => new //Select 메서드를 사용하여 컬렉션 데이터를 익명 객체의 시퀀스로 매핑
+            // 페이징 데이터 가져오기
+            var data = await collection.Find(_ => true)
+                                        .Skip((page - 1) * limit)  // 페이지 시작점
+                                        .Limit(limit)             // 페이지에 표시할 데이터 개수
+                                        .ToListAsync();
+
+            // ObjectId를 문자열로 변환하여 반환 데이터 구성
+            var response = new
             {
-                Id = entry.Id.ToString(),        // ObjectId -> 문자열 변환
-                Column = entry.column,
-                NumPlate = entry.numPlate,
-                InTime = entry.inTime,
-                OutTime = entry.outTime,
-                HoursParked = entry.hoursParked,
-                RatePerHour = entry.ratePerHour,
-                TotalCost = entry.totalCost,
-                Etc = entry.etc
-            });
+                TotalCount = totalCount,                     // 전체 데이터 개수
+                TotalPages = (int)Math.Ceiling((double)totalCount / limit), // 총 페이지 수
+                CurrentPage = page,                         // 현재 페이지 번호
+                PageSize = limit,                           // 페이지당 데이터 개수
+                Data = data.Select(entry => new
+                {
+                    Id = entry.Id.ToString(),              // ObjectId -> 문자열 변환
+                    Column = entry.column,
+                    NumPlate = entry.numPlate,
+                    InTime = entry.inTime,
+                    OutTime = entry.outTime,
+                    MinsParked = entry.minsParked,
+                    Rate = entry.rate,
+                    TotalCost = entry.totalCost,
+                    Etc = entry.etc
+                })
+            };
 
-            return Ok(response);
+            return Ok(response); // 200 OK와 함께 결과 반환
         }
+
 
         // GET: ID로 특정 데이터 가져오기 (Database1 - entries)
         [HttpGet("database1/{id:length(24)}")]
@@ -68,14 +81,59 @@ namespace parking.Controllers
             return Ok(data);
         }
 
-        // POST: 데이터 추가 (Database1 - entries)
+        // 최근 생성된 데이터 5개 가져오기 (Database1 - entries)
+        [HttpGet("database1/recent")]
+        public async Task<IActionResult> GetRecentEntries()
+        {
+            var collection = _service.GetentriesCollection("entries");
+
+            // 최근 생성된 데이터 5개 가져오기
+            var recentData = await collection.Find(_ => true)
+                                             .SortByDescending(x => x.Id) // ObjectId는 생성 시간 순으로 정렬 가능
+                                             .Limit(5)
+                                             .ToListAsync();
+
+            // 반환 데이터 형식 설정
+            var response = recentData.Select(entry => new
+            {
+                Id = entry.Id.ToString(),
+                NumPlate = entry.numPlate,
+                InTime = entry.inTime,
+                OutTime = entry.outTime,
+                MinsParked = entry.minsParked,
+                Rate = entry.rate,
+                TotalCost = entry.totalCost
+            });
+
+            return Ok(response);
+        }
+
+        // POST 요청 시 SignalR을 통해 새 데이터 전달
         [HttpPost("database1")]
         public async Task<IActionResult> AddToDatabase1([FromBody] entriesData data)
         {
             var collection = _service.GetentriesCollection("entries");
-            await collection.InsertOneAsync(data);
-            return CreatedAtAction(nameof(GetDatabase1DataById), new { id = data.Id.ToString() }, data);
+            await collection.InsertOneAsync(data); // 데이터 삽입
+
+            // 삽입된 데이터의 반환 형식 설정 (Id를 문자열로 변환)
+            var responseData = new
+            {
+                Id = data.Id.ToString(),
+                NumPlate = data.numPlate,
+                InTime = data.inTime,
+                OutTime = data.outTime,
+                MinsParked = data.minsParked,
+                Rate = data.rate,
+                TotalCost = data.totalCost
+            };
+
+            // SignalR 브로드캐스트 (문자열로 변환된 Id 사용)
+            await _hubContext.Clients.All.SendAsync("ReceiveChange", responseData);
+
+            // CreatedAtAction에 변환된 데이터 사용
+            return CreatedAtAction(nameof(GetDatabase1DataById), new { id = data.Id.ToString() }, responseData);
         }
+
 
         // PUT: 데이터 업데이트 (Database1 - entries)
         [HttpPut("database1/{id:length(24)}")]
@@ -83,13 +141,36 @@ namespace parking.Controllers
         {
             var collection = _service.GetentriesCollection("entries");
             var filter = Builders<entriesData>.Filter.Eq(x => x.Id, ObjectId.Parse(id));
+
+            try
+            {
+                if (!string.IsNullOrEmpty(updatedData.inTime) && !string.IsNullOrEmpty(updatedData.outTime))
+                {
+                    int inMinutes = ConvertTimeStringToMinutes(updatedData.inTime);
+                    int outMinutes = ConvertTimeStringToMinutes(updatedData.outTime);
+
+                    if (outMinutes < inMinutes)
+                    {
+                        return BadRequest("Invalid time range: outTime must be later than inTime.");
+                    }
+
+                    int duration = outMinutes - inMinutes;
+                    updatedData.minsParked = duration; // 주차 시간(분 단위)
+                    updatedData.totalCost = CalculateTotalCost(duration, updatedData.rate);
+                }
+            }
+            catch (FormatException ex)
+            {
+                return BadRequest(ex.Message);
+            }
+
             var update = Builders<entriesData>.Update
                 .Set(x => x.column, updatedData.column)
                 .Set(x => x.numPlate, updatedData.numPlate)
                 .Set(x => x.inTime, updatedData.inTime)
                 .Set(x => x.outTime, updatedData.outTime)
-                .Set(x => x.hoursParked, updatedData.hoursParked)
-                .Set(x => x.ratePerHour, updatedData.ratePerHour)
+                .Set(x => x.minsParked, updatedData.minsParked)
+                .Set(x => x.rate, updatedData.rate)
                 .Set(x => x.totalCost, updatedData.totalCost)
                 .Set(x => x.etc, updatedData.etc);
 
@@ -97,8 +178,19 @@ namespace parking.Controllers
 
             if (result.MatchedCount == 0) return NotFound();
 
-            // SignalR를 통해 업데이트된 데이터를 클라이언트에 브로드캐스트
-            await _hubContext.Clients.All.SendAsync("ReceiveChange", updatedData);
+            // SignalR을 통해 업데이트된 데이터를 브로드캐스트
+            await _hubContext.Clients.All.SendAsync("ReceiveChange", new
+            {
+                Id = id,
+                Column = updatedData.column,
+                NumPlate = updatedData.numPlate,
+                InTime = updatedData.inTime,
+                OutTime = updatedData.outTime,
+                MinsParked = updatedData.minsParked,
+                Rate = updatedData.rate,
+                TotalCost = updatedData.totalCost,
+                Etc = updatedData.etc
+            });
 
             return NoContent();
         }
@@ -174,5 +266,40 @@ namespace parking.Controllers
             if (result.DeletedCount == 0) return NotFound();
             return NoContent();
         }
+
+        // 시간 문자열을 분 단위로 변환하는 함수 (기본 함수)
+        private int ConvertTimeStringToMinutes(string timeString)
+        {
+            // 시간 문자열 형식 예: "20241212-144830"
+            if (timeString.Length != 15 || timeString[8] != '-')
+            {
+                throw new FormatException("Invalid time format. Expected format: YYYYMMDD-HHMMSS.");
+            }
+
+            // 시분 데이터 추출
+            string hourMinute = timeString.Substring(9, 4); // "1448"
+            int hour = int.Parse(hourMinute.Substring(0, 2)); // "14"
+            int minute = int.Parse(hourMinute.Substring(2, 2)); // "48"
+
+            return hour * 60 + minute; // 분 단위 시간 반환
+        }
+
+
+        // 요금 계산 함수
+        private int CalculateTotalCost(int duration, int rate)
+        {
+            const int baseRate = 10000; // 기본요금
+            int additionalCost = 0;
+
+            if (duration > 60)
+            {
+                int additionalMinutes = duration - 60;
+                int additionalUnits = (int)Math.Ceiling(additionalMinutes / 10.0);
+                additionalCost = additionalUnits * rate;
+            }
+
+            return baseRate + additionalCost;
+        }
+
     }
 }
