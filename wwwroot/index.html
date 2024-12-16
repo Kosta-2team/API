@@ -16,6 +16,14 @@
             border: 1px solid #ccc;
             background-color: #f9f9f9;
         }
+        #pagination {
+            margin-top: 20px;
+            text-align: center;
+        }
+        #pagination button {
+            padding: 5px 10px;
+            margin: 0 10px;
+        }
     </style>
 </head>
 <body>
@@ -33,14 +41,27 @@
         <ul id="recent-list"></ul>
     </div>
 
+    <div id="pagination">
+        <button id="prevPage" disabled>Previous</button>
+        <span id="currentPage">1</span> / <span id="totalPages">1</span>
+        <button id="nextPage">Next</button>
+        <label for="pageLimit">Entries per page:</label>
+        <input type="number" id="pageLimit" value="" min="1">
+    </div>
+
     <script>
+        // 초기 변수 설정
+        let currentPage ; // 현재 페이지
+        let pageLimit ;    // 페이지당 출력 데이터 수
+        let totalPages ;   // 총 페이지 수
+        let totalCount ;   // 총 데이터 개수
+
         const receivedIds = new Map(); // ID와 데이터 상태 저장
 
         const connection = new signalR.HubConnectionBuilder()
             .withUrl("/hubs/notification")
             .build();
 
-        // 중복된 이벤트 리스너가 등록되지 않도록 제거
         connection.on("ReceiveChange", async (data) => {
             const id = data.id;
 
@@ -51,88 +72,167 @@
 
             const currentData = receivedIds.get(id);
 
-            // 이전 데이터와 동일하면 무시
             if (currentData && JSON.stringify(currentData) === JSON.stringify(data)) {
                 return; // 중복 데이터는 로그 출력 없이 무시
             }
 
-            // 데이터 변경 로그
             console.log("데이터 변경 감지:", data);
-
-            // 최신 데이터 저장
             receivedIds.set(id, data);
 
-            // UI 변경 로그 업데이트
             const logList = document.getElementById("log-list");
             let listItem = document.querySelector(`li[data-id="${id}"]`);
 
             if (listItem) {
-                listItem.textContent = JSON.stringify(data); // 기존 데이터 업데이트
+                listItem.textContent = JSON.stringify(data);
             } else {
                 listItem = document.createElement("li");
                 listItem.setAttribute("data-id", id);
                 listItem.textContent = JSON.stringify(data);
-                logList.appendChild(listItem); // 새로운 데이터 추가
+                logList.appendChild(listItem);
             }
 
-            // 모든 데이터 요청 및 갱신
+            // All Results 업데이트
             await updateAllResults();
+
+            // Recent Results 업데이트
+            await updateRecentResults();
         });
 
-        // 모든 데이터 갱신
+        // 초기 데이터 로드
+        window.onload = async () => {
+            currentPage = 1;
+            pageLimit = 5;
+
+            await updateAllResults();  // All Results 초기화
+            await updateRecentResults();  // Recent Results 초기화
+        };
+
         async function updateAllResults() {
+            // console.log("All Results 업데이트 시작");
             try {
-                const response = await fetch('https://localhost:7002/api/Data/database1'); // 데이터 요청
+                const response = await fetch(`https://localhost:7002/api/Data/database1?page=${currentPage}&limit=${pageLimit}`);
                 const allData = await response.json();
+                // console.log("All Results 응답:", allData);
 
+                // 총 데이터 개수 및 페이지 수 계산
+                totalCount = allData.totalCount;
+                totalPages = Math.ceil(totalCount / pageLimit);
+                
                 const resultsList = document.getElementById("results-list");
-                resultsList.innerHTML = ""; // 기존 데이터를 지우고
+                resultsList.innerHTML = "";
 
-                // 데이터 가공 후 렌더링
-                allData.forEach(item => {
+                allData.data.forEach(item => {
                     const listItem = document.createElement("li");
-
-                    // 원하는 형식으로 데이터 구성
-                    const formattedData = `입차 시간: ${item.inTime} 출차 시간: ${item.outTime} 주차 시간: ${item.hoursParked} 시간 당 가격: ${item.ratePerHour} 결제 금액: ${item.totalCost}`;
-                    // const formattedData = `${item.id}`;
-                    listItem.textContent = formattedData.trim(); // 줄바꿈 제거
+                    const formattedData = `번호 : ${item.numPlate} // 입차 시간: ${item.inTime} // 출차 시간: ${item.outTime} // 주차 시간(분): ${item.minsParked} // 분당 요금: ${item.rate} // 결제 금액: ${item.totalCost}`;
+                    listItem.textContent = formattedData.trim();
                     resultsList.appendChild(listItem);
                 });
 
-                // 최근 5개 데이터를 갱신
-                updateRecentResults(allData);
+                // 최근 5개 데이터 갱신
+                updateRecentResults(allData.data);
+
+                updatePaginationUI();
             } catch (error) {
                 console.error("모든 데이터를 가져오는 데 실패:", error);
             }
         }
 
-        // 최근 5개 데이터 갱신
-        function getTimestampFromObjectId(id) {
-            // MongoDB ObjectId에서 타임스탬프 추출
-            return new Date(parseInt(id.substring(0, 8), 16) * 1000);
+        // function updateRecentResults(allData) {
+        //     const sortedData = allData.sort((a, b) => new Date(b.id) - new Date(a.id));
+        //     const recent = sortedData.slice(0, 5);
+
+        //     const recentList = document.getElementById("recent-list");
+        //     recentList.innerHTML = "";
+
+        //     recent.forEach(item => {
+        //         const listItem = document.createElement("li");
+        //         const formattedData = `번호 : ${item.numPlate} // 입차 시간: ${item.inTime} // 출차 시간: ${item.outTime} // 주차 시간(분): ${item.minsParked} // 분당 요금: ${item.rate} // 결제 금액: ${item.totalCost}`;
+        //         listItem.textContent = formattedData.trim();
+        //         recentList.appendChild(listItem);
+        //     });
+        // }
+
+        // Recent Results 업데이트 함수
+        async function updateRecentResults() {
+            // console.log("Recent Results 업데이트 시작");
+            try {
+                const response = await fetch("https://localhost:7002/api/Data/database1/recent");
+                const recentData = await response.json();
+                // console.log("Recent Results 응답:", recentData);
+
+                const recentList = document.getElementById("recent-list");
+                recentList.innerHTML = ""; // 기존 리스트 초기화
+
+                recentData.forEach(item => {
+                    const listItem = document.createElement("li");
+                    listItem.textContent = `번호: ${item.numPlate} // 입차 시간: ${item.inTime} // 출차 시간: ${item.outTime} // 주차 시간(분): ${item.minsParked} // 분당 요금: ${item.rate} // 결제 금액: ${item.totalCost}`;
+                    recentList.appendChild(listItem);
+                });
+            } catch (error) {
+                console.error("최근 데이터를 가져오는 데 실패:", error);
+            }
         }
 
-        function updateRecentResults(allData) {
-            // 데이터를 ObjectId 기준으로 내림차순 정렬
-            const sortedData = allData.sort((a, b) => getTimestampFromObjectId(b.id) - getTimestampFromObjectId(a.id));
 
-            // 최근 5개 데이터 추출
-            const recent = sortedData.slice(0, 5);
+        function updatePaginationUI() {
+            document.getElementById("totalPages").textContent = totalPages;
+            document.getElementById("currentPage").textContent = currentPage;
+            document.getElementById("prevPage").disabled = currentPage === 1;
+            document.getElementById("nextPage").disabled = currentPage === totalPages;
+        }
 
-            // UI 갱신
-            const recentList = document.getElementById("recent-list");
-            recentList.innerHTML = ""; // 기존 데이터를 지우고
+        // 페이지네이션 버튼 클릭 이벤트
+        document.getElementById("prevPage").addEventListener("click", () => {
+            if (currentPage > 1) {
+                currentPage--;
+                fetchData(currentPage, pageLimit);
+                updatePaginationUI();
+            }
+        });
 
-            // 데이터 렌더링
-            recent.forEach(item => {
+        document.getElementById("nextPage").addEventListener("click", () => {
+            if (currentPage < totalPages) {
+                currentPage++;
+                fetchData(currentPage, pageLimit);
+                updatePaginationUI();
+            }
+        });
+
+        // Entries per page 값 변경 시 처리
+        document.getElementById("pageLimit").addEventListener("change", async (event) => {
+            const newLimit = parseInt(event.target.value) || 5; // 유효하지 않은 값은 기본값 5로 설정
+            pageLimit = newLimit; 
+            currentPage = 1; // 페이지를 처음으로 리셋
+            await updateAllResults(); // 데이터를 다시 가져오고 페이지 수 갱신
+        });
+
+
+        // 데이터 요청 함수
+        async function fetchData(page, limit) {
+            try {
+                const response = await fetch(`https://localhost:7002/api/Data/database1?page=${page}&limit=${limit}`);
+                const data = await response.json();
+                renderData(data); // 데이터를 UI에 렌더링
+            } catch (error) {
+                console.error("데이터 가져오기 실패:", error);
+            }
+        }
+
+        // 데이터 렌더링 함수
+        function renderData(data) {
+            const resultsList = document.getElementById("results-list");
+            resultsList.innerHTML = "";
+
+            data.data.forEach(item => {
                 const listItem = document.createElement("li");
-
-                // 원하는 형식으로 데이터 구성
-                const formattedData = `입차 시간: ${item.inTime} 출차 시간: ${item.outTime} 주차 시간: ${item.hoursParked} 시간 당 가격: ${item.ratePerHour} 결제 금액: ${item.totalCost}`;
-                listItem.textContent = formattedData.trim();
-                recentList.appendChild(listItem);
+                const formattedData = `번호 : ${item.numPlate} // 입차 시간: ${item.inTime} // 출차 시간: ${item.outTime} // 주차 시간(분): ${item.minsParked} // 분당 요금: ${item.rate} // 결제 금액: ${item.totalCost}`;
+                listItem.textContent = formattedData;
+                resultsList.appendChild(listItem);
             });
         }
+
+        // 초기 데이터 로드
+        fetchData(currentPage, pageLimit);
 
         // SignalR 연결 시작
         connection.start()
